@@ -1,9 +1,9 @@
-(ns playlist.core
+(ns smart-playlist.core
   (:require [clj-time.core :as t]
             [clojure.java.shell :refer [sh]]
             [clojure.string :as str]
             [com.github.bdesham.clj-plist :refer [parse-plist]]
-            [playlist.util :as util])
+            [smart-playlist.util :as util])
   (:gen-class))
 
 ;;;; Reading the library from disk

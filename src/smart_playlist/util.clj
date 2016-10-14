@@ -1,4 +1,4 @@
-(ns playlist.util
+(ns smart-playlist.util
   (:require [clojure.edn :as edn]))
 
 (defn sq
