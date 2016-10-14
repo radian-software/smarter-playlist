@@ -249,7 +249,7 @@
   [& {:keys [length playlist-name strategy-weights]
       :or {length 100
            playlist-name "Smarter Playlist"}}]
-  (printf "Creating playlist of length %d with strategy weights %s and saving it as \"%s\"...%n"
+  (printf "Creating playlist of length %d with strategy weights %s and saving it as \"%s\"... "
           length
           (or strategy-weights default-strategy-weights)
           playlist-name)
@@ -259,7 +259,8 @@
     (add-songs-to-playlist
       (-> (itunes-library)
         (library->songs)
-        (playlist length strategy-weights)))))
+        (playlist length strategy-weights))))
+  (println "done."))
 
 (defn -main
   "Main entry point. Command line arguments are concatenated with
