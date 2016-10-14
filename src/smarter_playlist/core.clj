@@ -87,7 +87,7 @@
    (age->weight age nil))
   ([age default]
    (if age
-     (Math/pow (Math/log age) 5)
+     (Math/pow (Math/log age) 6)
      default)))
 
 (defn weight
