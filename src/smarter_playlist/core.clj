@@ -63,10 +63,9 @@
     (reduce-kv (fn [album-map album songs]
                  (assoc album-map album
                         (sort-by (fn [song]
-                                   [(nil? song)
-                                    (when song
-                                      (title song)
-                                      (track-number song))])
+                                   [(nil? (track-number song))
+                                    (or (track-number song)
+                                        (title song))])
                                  songs)))
                {})))
 
