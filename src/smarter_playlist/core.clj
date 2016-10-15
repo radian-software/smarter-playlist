@@ -139,8 +139,8 @@
 (def default-strategy-weights
   "Default value of strategy-weights used by playlist."
   {:next-in-album 100
-   :random-in-album 2
-   :random 20})
+   :random-in-album 10
+   :random 100})
 
 (defn playlist
   "Returns a playlist of the given length drawn from the given song
