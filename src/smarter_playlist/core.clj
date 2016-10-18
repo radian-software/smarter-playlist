@@ -161,6 +161,7 @@
       (cons :random)
       (reductions (partial next-song songs albums) nil)
       (remove nil?)
+      (distinct)
       (take (dec length)))))
 
 ;;;; Interacting with AppleScript
