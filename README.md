@@ -26,7 +26,7 @@ This script will create an iTunes playlist that:
 * Clone (`git clone https://github.com/raxod502/smarter-playlist.git`)
   or download this repository.
 * Make sure you have a [JDK] (or at least a JRE) installed.
-* Install Leiningen using [Homebrew] (`brew install leiningen`) or
+* Install Leiningen using [Homebrew][homebrew] (`brew install leiningen`) or
   from [the official website](leiningen).
 
 ## Basic usage
