@@ -1,10 +1,35 @@
 (ns smarter-playlist.core
+  (:gen-class)
   (:require [clj-time.core :as t]
             [clojure.java.shell :refer [sh]]
             [clojure.string :as str]
             [com.github.bdesham.clj-plist :refer [parse-plist]]
-            [smarter-playlist.util :as util])
-  (:gen-class))
+            [smarter-playlist
+             [stats :as stats]
+             [util :as util :refer [defconfig]]]))
+
+;;;; Configuration variables
+
+(defconfig age-summary
+  (stats/mean-median))
+
+(defconfig age-weighting
+  (stats/log-power))
+
+(defconfig length-distribution
+  (-> (stats/normal :mean 8 :stdev 5)
+    (stats/bounded :min 0 :max 6)
+    (stats/rounded)))
+
+(defconfig fraction-distribution
+  (-> (stats/normal :mean 0.5 :stdev 0.3)
+    (stats/bounded :min 0 :max 1)))
+
+(defconfig playlist-length
+  100)
+
+(defconfig playlist-name
+  "Smarter Playlist")
 
 ;;;; Reading the library from disk
 
@@ -33,10 +58,24 @@
   [song]
   (get song "Track Number"))
 
+(defn disc-number
+  "Returns the disc number of a song."
+  [song]
+  (get song "Disc Number"))
+
 (defn comments
   "Returns the contents of a song's Comments field."
   [song]
   (get song "Comments"))
+
+(defn pseudo-track-number
+  "Returns an object that can be used to sort songs according to the
+  order in which they appear in iTunes within a single album."
+  [song]
+  [(disc-number song)
+   (nil? (track-number song))
+   (or (track-number song)
+       (title song))])
 
 ;;;; Reshaping the library
 
@@ -62,10 +101,7 @@
     (group-by album)
     (reduce-kv (fn [album-map album songs]
                  (assoc album-map album
-                        (sort-by (fn [song]
-                                   [(nil? (track-number song))
-                                    (or (track-number song)
-                                        (title song))])
+                        (sort-by pseudo-track-number
                                  songs)))
                {})))
 
@@ -73,96 +109,81 @@
 
 (defn age
   "Determine how long it has been since a song was last played, in
-  seconds."
-  [song]
-  (when-let [play-date (get song "Play Date UTC")]
+  seconds. Returns default-age if the song has never been played."
+  [song default-age]
+  (if-let [play-date (get song "Play Date UTC")]
     (-> play-date
       (t/interval (t/now))
-      (t/in-seconds))))
-
-(defn age->weight
-  "Converts the age of a song into the weight of that song when it is
-  being considered for random selection."
-  ([age]
-   (age->weight age nil))
-  ([age default]
-   (if age
-     (Math/pow (Math/log age) 6)
-     default)))
-
-(defn weight
-  "Determines the weight of a song when it is being considered for
-  random selection."
-  ([song]
-   (weight song nil))
-  ([song default]
-   (age->weight (age song) default)))
+      (t/in-seconds))
+    default-age))
 
 ;;;; Generating playlists
 
-(defn next-song
-  "Given a song list and album map (as returned by library->songs and
-  songs->albums, respectively), a current song (or nil), and a keyword
-  representing the strategy to use, selects another song and returns
-  it (or nil). The :next-in-album strategy means to return the song
-  coming directly after the current song in the same album, or nil if
-  the current song was nil or the last song in the album.
-  The :random-in-album strategy means to return a random song in the
-  album of the current song, or nil if the current song was nil.
-  The :random strategy means to return a random song across the entire
-  library, weighted according to age (via age->weight), regardless of
-  the current song."
-  [songs album-map song strategy]
-  (case strategy
-    :next-in-album
-    (->> (get album-map (album song))
-      (drop-while #(not= (title %)
-                         (title song)))
-      (second))
+(defn select-album
+  "Returns the name of a randomly chosen album."
+  [album-map max-age]
+  (->> album-map
+    (reduce-kv (fn [[album-names weights] album-name songs]
+                 [(conj album-names album-name)
+                  (conj weights
+                        (age-summary
+                          (map #(age % max-age)
+                               songs)))])
+               [[] []])
+    (apply stats/weighted-rand-nth)))
 
-    :random-in-album
-    (rand-nth (get album-map (album song)))
+(defn select-songs
+  "Returns a random selection of songs, ordered by
+  `pseudo-track-number`."
+  [songs max-age]
+  (let [initial-index (stats/weighted-rand-nth
+                        (range (count songs))
+                        (map #(age % max-age)
+                             songs))
+        indices (->> initial-index
+                  (iterate (rand-nth [inc dec]))
+                  (map #(mod % (count songs)))
+                  (distinct)
+                  (take (min (length-distribution)
+                             (count songs))))
+        songs (map #(nth songs %) indices)]
+    (loop [chosen-songs []
+           songs songs
+           remaining-to-choose (* (count songs)
+                                  (fraction-distribution))]
+      (if (pos? remaining-to-choose)
+        (let [song (stats/weighted-rand-nth
+                     songs
+                     (map #(age % max-age)
+                          songs))]
+          (recur (conj chosen-songs song)
+                 (remove #{song} songs)
+                 (dec remaining-to-choose)))
+        (sort-by pseudo-track-number chosen-songs)))))
 
-    :random
-    (let [oldest (->> songs
-                   (map age)
-                   (remove nil?)
-                   (apply max))]
-      (util/weighted-rand-nth
-        songs
-        (map (fn [song]
-               (age->weight
-                 (or (age song)
-                     oldest)))
-             songs)))))
-
-(def default-strategy-weights
-  "Default value of strategy-weights used by playlist."
-  {:next-in-album 100
-   :random-in-album 10
-   :random 100})
-
-(defn playlist
-  "Returns a playlist of the given length drawn from the given song
-  list (as returned by library->songs). The playlist is generated by
-  picking a (weighted) random song and calling next-song repeatedly
-  with strategies selected from the strategy-weights map, whose keys
-  are the strategy keywords (see next-song) and whose values are their
-  weights for random selection."
-  [songs length & [strategy-weights]]
-  (let [strategy-weights (or strategy-weights
-                             default-strategy-weights)
-        albums (songs->albums songs)]
-    (->> strategy-weights
-      ((juxt keys vals))
-      (apply util/weighted-rand-nth)
-      (fn [])
-      (repeatedly)
-      (cons :random)
-      (reductions (partial next-song songs albums) nil)
-      (remove nil?)
-      (distinct)
-      (take (dec length)))))
+(defn create-playlist
+  "Creates a playlist (vector of songs) and returns it."
+  [album-map]
+  (let [max-age (->> album-map
+                  (vals)
+                  (apply concat)
+                  (keep #(age % nil))
+                  (apply max 0))]
+    (loop [playlist []
+           album-map album-map]
+      (if (< (count playlist) playlist-length)
+        (let [album (select-album album-map max-age)
+              songs (select-songs (get album-map album) max-age)]
+          (recur (into playlist songs)
+                 (let [album-map (update album-map album
+                                         (fn [original-songs]
+                                           (vec
+                                             (remove (set songs)
+                                                     original-songs))))]
+                   (cond-> album-map
+                     (empty? (get album-map album))
+                     (dissoc album)))))
+        (subvec playlist 0 playlist-length)))))
 
 ;;;; Interacting with AppleScript
 
@@ -173,18 +194,23 @@
   (str/replace s "\"" "\\\""))
 
 (defn run-applescript
-  "Given a sequence of lines of AppleScript code, shells out to run
-  them."
-  [lines]
-  (->> lines
-    (interleave (repeat "-e"))
-    (apply sh "osascript")))
+  "Shells out to run AppleScript code. If the code is too large to be
+  runnable as a shell command, writes it to a temporary file before
+  executing it."
+  [code]
+  (if (<= (count code) 100000)
+    (sh "osascript" "-e" code)
+    (let [file "/tmp/smarter-playlist-applescript"]
+      (spit file code)
+      (sh "osascript" file))))
 
 (defn format-applescript
   "Convenience function for generating AppleScript code to pass to
-  run-applescript."
+  `run-applescript`."
   [lines+args]
-  (map #(apply format %) lines+args))
+  (->> lines+args
+    (map #(apply format %))
+    (str/join \newline)))
 
 ;;;; Controlling iTunes via AppleScript
 ;;; Based on http://apple.stackexchange.com/a/77626/184150
@@ -193,7 +219,7 @@
 (defn make-empty-playlist
   "Creates an empty iTunes playlist with the given name, or clears
   the playlist by that name if it already exists."
-  [playlist-name]
+  []
   (run-applescript
     (format-applescript
       [["tell application \"iTunes\""]
@@ -213,66 +239,53 @@
   two or more songs in your iTunes library with the same title and
   album name, then this function might add the wrong one to the
   playlist."
-  [playlist-name songs]
+  [songs]
   (run-applescript
     (format-applescript
-      `[["set thePlaylistName to \"%s\"" ~(escape playlist-name)]
-        [""]
-        ["tell application \"iTunes\""]
+      `[["tell application \"iTunes\""]
         ~@(map (fn [song]
-                 ["    my handleSong(\"%s\", \"%s\")"
+                 ["    duplicate (first item of (tracks whose (name is \"%1$s\") and (album is \"%2$s\"))) to playlist \"%3$s\""
                   (escape (title song))
-                  (escape (album song))])
+                  (escape (album song))
+                  (escape playlist-name)])
                songs)
-        ["    my handleSong(\"Silence\", \"F-Zero Remixed\")"]
-        ["end tell"]
-        [""]
-        ["on handleSong(theSongName, theAlbumName)"]
-        ["    tell application \"iTunes\""]
-        ["        set filteredSongs to (every track of library playlist 1 whose name is theSongName)"]
-        ["        repeat with theFilteredSong in filteredSongs"]
-        ["            if the album of theFilteredSong is theAlbumName then"]
-        ["                duplicate theFilteredSong to playlist (my thePlaylistName)"]
-        ["                return"]
-        ["            end if"]
-        ["        end repeat"]
-        ["    end tell"]
-        ["    display dialog \"Uh, oh. Couldn't find '\" & theSongName & \"' by '\" & theAlbumName & \"'!\""]
-        ["end handleSong"]])))
+        ["end tell"]])))
 
 ;;;; Main entry point
 
 (defn create-and-save-playlist
-  "Create a playlist according to the given parameters (see playlist),
-  make an empty iTunes playlist of the given name (see
-  make-empty-playlist), and fill it with the songs in the generated
-  playlist (see add-songs-to-playlist)."
-  [& {:keys [length playlist-name strategy-weights]
-      :or {length 100
-           playlist-name "Smarter Playlist"}}]
-  (printf "Creating playlist of length %d with strategy weights %s and saving it as \"%s\"... "
-          length
-          (or strategy-weights default-strategy-weights)
-          playlist-name)
-  (flush)
-  (doto playlist-name
-    (make-empty-playlist)
-    (add-songs-to-playlist
-      (-> (itunes-library)
-        (library->songs)
-        (playlist length strategy-weights))))
-  (println "done."))
+  "Create a playlist (see `create-playlist`), make an empty iTunes
+  playlist of the given name (see `make-empty-playlist`), and fill it
+  with the songs in the generated playlist (see
+  `add-songs-to-playlist`)."
+  []
+  (println)
+  (println "Making an empty playlist in iTunes.")
+  (make-empty-playlist)
+  (println "Reading iTunes library.")
+  (let [songs (library->songs (itunes-library))]
+    (if (<= playlist-length (count songs))
+      (let [album-map (songs->albums songs)]
+        (println "Creating playlist.")
+        (let [playlist (create-playlist album-map)]
+          (println "Exporting playlist to iTunes.")
+          (add-songs-to-playlist playlist)))
+      (printf "You can't make a playlist of length %d if your library only has %d songs!%n"
+              playlist-length (count songs)))))
+
+(defn main
+  "Like `-main`, but doesn't call `shutdown-agents` and is therefore
+  suitable for testing."
+  [& args]
+  (binding [*ns* (the-ns 'smarter-playlist.core)]
+    (util/with-parsed-options args create-and-save-playlist)))
 
 (defn -main
-  "Main entry point. Command line arguments are concatenated with
-  spaces, the resulting string is parsed as a sequence of EDN data
-  structures, and the data structures are passed as arguments to
-  create-and-save-playlist."
+  "Main entry point. Command line arguments are parsed and the
+  configuration vars are bound accordingly, then
+  `create-and-save-playlist` is called."
   [& args]
-  (->> args
-    (str/join \space)
-    (util/read-all)
-    (apply create-and-save-playlist))
+  (apply main args)
   ;; The following prevents a minute-long hang that keeps Clojure from
   ;; exiting after finishing:
   (shutdown-agents))
