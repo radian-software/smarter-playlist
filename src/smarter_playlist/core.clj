@@ -126,9 +126,10 @@
     (reduce-kv (fn [[album-names weights] album-name songs]
                  [(conj album-names album-name)
                   (conj weights
-                        (age-summary
-                          (map #(age % max-age)
-                               songs)))])
+                        (age-weighting
+                          (age-summary
+                            (map #(age % max-age)
+                                 songs))))])
                [[] []])
     (apply stats/weighted-rand-nth)))
 
@@ -138,7 +139,7 @@
   [songs max-age]
   (let [initial-index (stats/weighted-rand-nth
                         (range (count songs))
-                        (map #(age % max-age)
+                        (map #(age-weighting (age % max-age))
                              songs))
         indices (->> initial-index
                   (iterate (rand-nth [inc dec]))
@@ -154,7 +155,7 @@
       (if (pos? remaining-to-choose)
         (let [song (stats/weighted-rand-nth
                      songs
-                     (map #(age % max-age)
+                     (map #(age-weighting (age % max-age))
                           songs))]
           (recur (conj chosen-songs song)
                  (remove #{song} songs)
