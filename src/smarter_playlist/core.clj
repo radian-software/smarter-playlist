@@ -87,8 +87,9 @@
   (-> library
     (get "Tracks")
     (vals)
-    (->> (filter #(re-find #"\\Tag2\\"
-                           (comments %))))))
+    (->> (filter comments)
+      (filter #(re-find #"\\Tag2\\"
+                        (comments %))))))
 
 (defn songs->albums
   "Converts a sequence of songs into a map from album names to
