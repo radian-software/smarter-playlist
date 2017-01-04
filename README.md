@@ -45,14 +45,16 @@ This script will create an iTunes playlist that:
 * Install Leiningen using [Homebrew][homebrew] (`brew install leiningen`) or
   from [the official website](leiningen).
 
-On OS X, you can use the [Radian] setup script to take care of all the
-dependencies. You *are* using OS X, right? (Smarter Playlist uses
-AppleScript to interface with iTunes and will only work on OS X.)
+On OS X, you can use [Homebrew] to install all the dependencies. You *are*
+using OS X, right? (Smarter Playlist uses AppleScript to interface with
+iTunes and will only work on OS X.)
 
 ```
-% git clone https://github.com/raxod502/radian.git
-% radian/scripts/setup.sh only leiningen
+% brew cask install java
+% brew install leiningen
 ```
+
+[homebrew]: http://brew.sh/
 
 ## Basic usage
 
